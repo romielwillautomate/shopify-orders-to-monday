@@ -1,0 +1,660 @@
+{
+  "name": "Shopify Orders to Monday.com Fulfillment Board",
+  "nodes": [
+    {
+      "id": "2fc0c15f-6ed5-5f73-b077-f172f4489603",
+      "name": "Note: Verify",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        120
+      ],
+      "parameters": {
+        "content": "## 1. Receive and verify\nShopify signs every webhook with your secret. A missing or wrong signature, or no secret set in n8n, gets a 401 and an alert. A good one gets a 200 straight away, so Shopify never times out and resends.",
+        "width": 960,
+        "height": 560,
+        "color": 3
+      }
+    },
+    {
+      "id": "af433e7d-d569-53ad-b1c0-8afd1e9687ca",
+      "name": "Note: Prepare",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        920,
+        120
+      ],
+      "parameters": {
+        "content": "## 2. Prepare the order\nSkips repeat deliveries (same webhook ID) and other topics. Maps the order to your columns and sets the VIP and rush flags.",
+        "width": 440,
+        "height": 560,
+        "color": 7
+      }
+    },
+    {
+      "id": "f7497169-2875-528d-a7a2-c7ad0784f734",
+      "name": "Note: Sync",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        120
+      ],
+      "parameters": {
+        "content": "## 3. Sync to the monday board\nFinds the item by order number. A new order gets an item plus one subitem per line item. An update changes the same item and adds any missing lines. Older updates are skipped. Rate limits wait as long as monday asks.",
+        "width": 1200,
+        "height": 780,
+        "color": 4
+      }
+    },
+    {
+      "id": "b2779fc5-506d-5e0a-adcd-0d61a0cd24ab",
+      "name": "Note: Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        120
+      ],
+      "parameters": {
+        "content": "## 4. Alert the team\nVIP and rush orders post to Slack with a link to the item, once per flag.",
+        "width": 700,
+        "height": 560,
+        "color": 6
+      }
+    },
+    {
+      "id": "3e206522-654b-5912-ab2e-9e4ef8049a65",
+      "name": "Shopify Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "shopify-orders-to-monday",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "webhookId": "36d27859-cbe5-5175-8a47-8b28bface56c"
+    },
+    {
+      "id": "e7873c83-fb0d-510e-a084-56080551da52",
+      "name": "Sign Raw Body",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "action": "hmac",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "type": "SHA256",
+        "dataPropertyName": "computedHmac",
+        "secret": "={{ String($env.SHOPIFY_WEBHOOK_SECRET ?? '').trim() }}",
+        "encoding": "base64"
+      }
+    },
+    {
+      "id": "9bdb4664-9399-5232-b74c-9d365c7e2444",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "6a1d80d6-ee1d-5987-a044-2c9e6ddcc26e",
+              "leftValue": "={{ String($env.SHOPIFY_WEBHOOK_SECRET ?? '').trim() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "27d31450-5f3b-5373-ab72-c2ee36e98184",
+              "leftValue": "={{ $json.headers['x-shopify-hmac-sha256'] }}",
+              "rightValue": "={{ $json.computedHmac }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1f4d5f7d-4ac9-5892-9ec9-195aeed2fa65",
+      "name": "Respond: Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        520
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Invalid webhook signature",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "id": "440285b4-d899-5c3b-8fac-0d4e4c59758a",
+      "name": "Stop: Bad Signature",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        660,
+        520
+      ],
+      "parameters": {
+        "errorMessage": "={{ (String($env.SHOPIFY_WEBHOOK_SECRET ?? '').trim() ? 'Shopify webhook rejected: the X-Shopify-Hmac-Sha256 header is missing or wrong' : 'Shopify webhook rejected: SHOPIFY_WEBHOOK_SECRET is not set in n8n, so every webhook is refused') + ' (topic ' + (/^[a-z_]+\\/[a-z_]+$/.test($json.headers['x-shopify-topic'] || '') ? $json.headers['x-shopify-topic'] : 'not given') + ', shop ' + (/^[a-z0-9][a-z0-9-]*\\.myshopify\\.com$/.test($json.headers['x-shopify-shop-domain'] || '') ? $json.headers['x-shopify-shop-domain'] : 'not given') + ').' + (String($env.SHOPIFY_WEBHOOK_SECRET ?? '').trim() ? ' If real orders land here, check SHOPIFY_WEBHOOK_SECRET.' : '') }}"
+      }
+    },
+    {
+      "id": "55610765-ec52-50fe-ad6a-bee7bd57c20e",
+      "name": "Respond: OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "3b3e0c21-408b-55f2-aef8-cbbe8c95b215",
+      "name": "Prepare Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Reads the Shopify order, skips repeat deliveries and builds the monday.com column values.\n// Column IDs come from MONDAY_COLUMNS and MONDAY_SUBITEM_COLUMNS (JSON objects), so any board layout works.\nconst TOPICS = ['orders/create', 'orders/updated'];\nconst KEEP_IDS_HOURS = 48; // Shopify retries a failed delivery for up to 4 hours\nconst COLUMN_KEYS = ['order_number', 'customer', 'email', 'total', 'payment_status', 'fulfillment_status',\n  'shipping_method', 'order_date', 'flags', 'shopify_updated_at'];\nconst SUBITEM_KEYS = ['sku', 'quantity'];\nconst PAYMENT = { pending: 'Pending', authorized: 'Authorized', partially_paid: 'Partially paid', paid: 'Paid',\n  partially_refunded: 'Partially refunded', refunded: 'Refunded', voided: 'Voided', expired: 'Expired' };\nconst FULFILLMENT = { fulfilled: 'Fulfilled', partial: 'Partially fulfilled', restocked: 'Restocked', not_eligible: 'Not eligible' };\n\n// Config, checked on every run so a typo shows up as a clear error instead of a half written item.\n// n8n keeps only the text after the last colon of a Code node error, so messages are made colon free.\nconst fail = text => { throw new Error(String(text).replace(/\\s*:\\s*/g, ', ')); };\nconst readMap = (name, raw, allowed) => {\n  let map = {};\n  if (raw && String(raw).trim()) {\n    try { map = JSON.parse(raw); } catch (e) { map = null; }\n    if (!map || typeof map !== 'object' || Array.isArray(map)) fail(`${name} must be a JSON object that maps keys such as ${allowed[0]} to monday column IDs`);\n  }\n  const unknown = Object.keys(map).filter(k => !allowed.includes(k));\n  if (unknown.length) fail(`Unknown key ${unknown.join(', ')} in ${name}. The allowed keys are ${allowed.join(', ')}`);\n  return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, String(v || '').trim()]));\n};\nconst columns = readMap('MONDAY_COLUMNS', $env.MONDAY_COLUMNS, COLUMN_KEYS);\nconst subColumns = readMap('MONDAY_SUBITEM_COLUMNS', $env.MONDAY_SUBITEM_COLUMNS, SUBITEM_KEYS);\nconst boardId = String($env.MONDAY_BOARD_ID || '').trim();\nconst groupId = String($env.MONDAY_GROUP_ID || '').trim();\nconst missing = [];\nif (!String($env.MONDAY_API_TOKEN || '').trim()) missing.push('MONDAY_API_TOKEN');\nif (!/^\\d+$/.test(boardId)) missing.push('MONDAY_BOARD_ID (digits only)');\nif (!columns.order_number) missing.push('MONDAY_COLUMNS with an \"order_number\" column');\nif (missing.length) fail(`Missing config. Set ${missing.join(', ')}`);\n\nconst vipRaw = String($env.VIP_ORDER_TOTAL ?? '').trim();\nconst vipTotal = vipRaw === '' ? 500 : Number(vipRaw);\nif (!Number.isFinite(vipTotal)) fail(`VIP_ORDER_TOTAL \"${vipRaw}\" is not a number`);\nconst rushWords = String($env.RUSH_SHIPPING_KEYWORDS ?? 'express,overnight,next day,priority,rush')\n  .split(',').map(w => w.trim().toLowerCase()).filter(Boolean);\nconst escapeRe = s => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst rushRes = rushWords.map(w => new RegExp(`(^|[^a-z0-9])${escapeRe(w)}($|[^a-z0-9])`, 'i'));\n\nconst titleCase = s => String(s || '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());\nconst isoSeconds = value => { const d = new Date(value); return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19) + 'Z'; };\nconst gidTail = (gid, fallback) => String(gid || '').split('/').pop() || String(fallback ?? '');\n\n// Repeat deliveries: Shopify retries with the same X-Shopify-Webhook-Id. The IDs are kept for 48 hours.\nconst store = $getWorkflowStaticData('global');\nconst seen = store.seenWebhookIds || (store.seenWebhookIds = {});\nconst now = Date.now();\nfor (const [id, at] of Object.entries(seen)) if (now - at > KEEP_IDS_HOURS * 3600 * 1000) delete seen[id];\n\nconst out = [];\n$input.all().forEach((item, i) => {\n  const h = item.json.headers || {};\n  const o = item.json.body || {};\n  const topic = String(h['x-shopify-topic'] || '').toLowerCase();\n  const webhookId = String(h['x-shopify-webhook-id'] || '');\n  const base = { topic, webhookId, shop: String(h['x-shopify-shop-domain'] || '') };\n  const skip = reason => out.push({ json: { ...base, skip: true, skipReason: reason }, pairedItem: { item: i } });\n\n  if (!TOPICS.includes(topic)) return skip(`topic \"${topic || 'none'}\" is not handled`);\n  if (webhookId && seen[webhookId]) return skip(`repeat delivery ${webhookId}`);\n  if (!o.id || !o.name) fail(`Shopify ${topic} webhook ${webhookId} has no order id or order name`);\n  if (webhookId) seen[webhookId] = now;\n\n  const name = [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' ').trim()\n    || o.billing_address?.name || o.shipping_address?.name || '';\n  const email = String(o.email || o.contact_email || o.customer?.email || '').trim();\n  const customer = name || email || 'Guest';\n  const totalRaw = o.current_total_price ?? o.total_price;\n  const total = Number(totalRaw);\n  if (totalRaw === null || totalRaw === undefined || totalRaw === '' || !Number.isFinite(total)) fail(`Order ${o.name} has a total of \"${totalRaw}\", which is not a number`);\n  // An order edit that changes the shipping keeps the old line with is_removed: true, so those are left out.\n  const shippingLines = (Array.isArray(o.shipping_lines) ? o.shipping_lines : []).filter(s => s && s.is_removed !== true);\n  const shipping = shippingLines.map(s => s.title || s.code).filter(Boolean).join(', ') || 'No shipping';\n  const payment = PAYMENT[o.financial_status] || titleCase(o.financial_status) || 'Unknown';\n  const fulfillment = o.cancelled_at ? 'Cancelled' : (FULFILLMENT[o.fulfillment_status] || (o.fulfillment_status ? titleCase(o.fulfillment_status) : 'Unfulfilled'));\n  const createdAt = isoSeconds(o.created_at || o.processed_at);\n  const updatedAt = isoSeconds(o.updated_at || o.created_at);\n  if (!createdAt) fail(`Order ${o.name} has no valid created_at date (${o.created_at})`);\n\n  // Flags\n  const flags = [], reasons = [];\n  if (vipTotal > 0 && total >= vipTotal) { flags.push('VIP'); reasons.push(`total ${total.toFixed(2)} is at or above the VIP limit of ${vipTotal}`); }\n  const rushLine = shippingLines.find(s => rushRes.some(re => re.test(`${s.title || ''} ${s.code || ''}`)));\n  if (rushLine) { flags.push('Rush'); reasons.push(`shipping \"${rushLine.title || rushLine.code}\" matches a rush keyword`); }\n\n  // Column values in monday's JSON formats. null clears a column on update and is left out on create.\n  const values = {};\n  const put = (key, value) => { if (columns[key]) values[columns[key]] = value; };\n  put('order_number', o.name);\n  put('customer', customer);\n  put('email', email ? { email, text: email } : null);\n  put('total', total.toFixed(2));\n  put('payment_status', { label: payment });\n  put('fulfillment_status', { label: fulfillment });\n  put('shipping_method', shipping);\n  put('order_date', { date: createdAt.slice(0, 10), time: createdAt.slice(11, 19) });\n  put('flags', flags.length ? { labels: flags } : null);\n  put('shopify_updated_at', updatedAt);\n\n  // current_quantity is the quantity after order edits and removals (quantity is the original one).\n  // Lines whose current quantity is 0 were removed from the order, so they get no new subitem.\n  const lineItems = (Array.isArray(o.line_items) ? o.line_items : []).map((li, n) => ({\n    lineItemId: gidTail(li.admin_graphql_api_id, li.id ?? n),\n    name: String(li.name || li.title || 'Item').trim().slice(0, 255),\n    sku: String(li.sku || '').trim(),\n    quantity: Number(li.current_quantity ?? li.quantity) || 0,\n  })).filter(li => li.quantity > 0);\n\n  out.push({\n    json: {\n      ...base, skip: false, boardId, groupId, columns, subColumns,\n      order: {\n        id: gidTail(o.admin_graphql_api_id, o.id), name: String(o.name), customer, email, total: total.toFixed(2),\n        currency: String(o.currency || ''), payment, fulfillment, shipping, createdAt, updatedAt, lineItems,\n      },\n      itemName: `${o.name} ${customer}`.slice(0, 255),\n      flags, flagReasons: reasons,\n      createValues: Object.fromEntries(Object.entries(values).filter(([, v]) => v !== null)),\n      updateValues: values,\n    },\n    pairedItem: { item: i },\n  });\n});\nreturn out;\n"
+      }
+    },
+    {
+      "id": "87e1b53d-c2c7-5e64-bd54-2525e4e1c4f5",
+      "name": "Should Sync?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "9a4c8eb2-75c2-5c68-b3ed-bc4117d0d87a",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e42200b1-47f7-5703-b102-77f0f7ad34b5",
+      "name": "Skip: Repeat or Other Topic",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1220,
+        520
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "d29b7160-7125-56d5-a3dc-929a628900b6",
+      "name": "Monday: Find Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// monday.com GraphQL client. The same block sits at the top of every \"Monday:\" node.\n// It runs in a Code node, not an HTTP Request node, for two reasons: monday sends most errors back\n// with HTTP 200 and an \"errors\" array, and its rate limit errors say how many seconds to wait\n// (retry_in_seconds). Here every GraphQL error fails the step, and rate limits wait as long as monday asks.\nconst MONDAY = {\n  url: 'https://api.monday.com/v2',\n  token: String($env.MONDAY_API_TOKEN || ''),\n  version: String($env.MONDAY_API_VERSION || '2026-07'),\n  attempts: Math.min(5, Math.max(1, Number($env.MONDAY_MAX_ATTEMPTS) || 4)),\n  maxWait: Math.min(60, Math.max(1, Number($env.MONDAY_MAX_WAIT_SECONDS) || 60)),\n  budget: 240, // seconds per step (requests and waits), so a step stops itself before n8n's 5 minute Code node limit\n  started: Date.now(),\n};\nconst elapsed = () => (Date.now() - MONDAY.started) / 1000;\nconst WAIT_CODES = ['COMPLEXITY_BUDGET_EXHAUSTED', 'ComplexityException', 'RATE_LIMIT_EXCEEDED', 'Rate Limit Exceeded',\n  'FIELD_LIMIT_EXCEEDED', 'maxConcurrencyExceeded', 'IP_RATE_LIMIT_EXCEEDED', 'IDEMPOTENCY_CONFLICT'];\nconst NO_RETRY_CODES = ['DAILY_LIMIT_EXCEEDED', 'API_TEMPORARILY_BLOCKED'];\nconst sleep = seconds => new Promise(resolve => setTimeout(resolve, seconds * 1000));\n// n8n keeps only the text after the last colon of a Code node error, so messages are made colon free.\nconst plain = text => String(text ?? '').replace(/https?:\\/\\//g, '').replace(/\\s*\\n\\s*/g, ' ').replace(/\\s*:\\s*/g, ', ');\n\n// Sends one GraphQL request. Mutations that create something pass an Idempotency-Key, so a retry\n// (or a second run doing the same thing at the same moment) gets monday's saved answer instead of a duplicate.\nconst monday = async (step, query, variables, idempotencyKey) => {\n  const headers = { Authorization: MONDAY.token, 'API-Version': MONDAY.version, 'Content-Type': 'application/json' };\n  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;\n  let problem = '';\n  let mayHaveRun = false; // true once an attempt failed in a way where monday may still have done the work\n  for (let attempt = 1; attempt <= MONDAY.attempts; attempt++) {\n    let res;\n    try {\n      res = await this.helpers.httpRequest({ method: 'POST', url: MONDAY.url, headers, body: { query, variables }, json: true,\n        returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 30000 });\n    } catch (e) {\n      res = { statusCode: 0, headers: {}, body: { error_message: String(e.message || e) } };\n    }\n    let body = res.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = { error_message: body.slice(0, 200) }; } }\n    body = body || {};\n    const errors = Array.isArray(body.errors) ? body.errors : [];\n    const status = Number(res.statusCode) || 0;\n    if (status === 200 && !errors.length && body.data) {\n      const replayed = String((res.headers || {})['idempotency-replayed'] || '').toLowerCase() === 'true';\n      return { data: body.data, replayedFromOtherRun: replayed && !mayHaveRun };\n    }\n    const first = errors[0] || {};\n    const ext = first.extensions || {};\n    const code = String(ext.code || body.error_code || '');\n    problem = `with ${code || 'an error'} (HTTP ${status || 'no response'}). ${first.message || body.error_message || 'No error message'}`;\n    if (status === 0 || status >= 500) mayHaveRun = true;\n    // 423 is monday's \"Resource is currently locked, please try again later\" (another write to the same board).\n    const retry = !NO_RETRY_CODES.includes(code)\n      && (status === 0 || status === 423 || status === 429 || status >= 500 || WAIT_CODES.includes(code) || Number(ext.status_code) === 429);\n    if (!retry || attempt === MONDAY.attempts) break;\n    const asked = Number(ext.retry_in_seconds ?? body.retry_in_seconds ?? (res.headers || {})['retry-after']);\n    const wait = Math.min(MONDAY.maxWait, asked > 0 ? asked : 2 * attempt);\n    if (elapsed() + wait > MONDAY.budget) { problem += ', still failing after ' + Math.round(elapsed()) + ' seconds'; break; }\n    await sleep(wait);\n  }\n  throw new Error(plain(`monday ${step} failed ${problem}`));\n};\nconst textOf = (item, columnId) => ((item && item.column_values) || []).find(c => c.id === columnId)?.text || '';\nconst flagsOf = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);\n\n// Looks the order up by its order number (items_page_by_column_values). Only an exact match counts.\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const o = item.json;\n  const readIds = [o.columns.order_number, o.columns.flags, o.columns.shopify_updated_at].filter(Boolean);\n  const query = `query FindOrder($board: ID!, $column: String!, $value: String!, $columnIds: [String!], $subitemColumnIds: [String!]) {\n  items_page_by_column_values(board_id: $board, limit: 10, columns: [{ column_id: $column, column_values: [$value] }]) {\n    items { id name url column_values(ids: $columnIds) { id text } subitems { id name column_values(ids: $subitemColumnIds) { id text } } }\n  }\n}`;\n  const { data } = await monday(`Find Order for ${o.order.name}`, query, {\n    board: o.boardId, column: o.columns.order_number, value: o.order.name,\n    columnIds: readIds, subitemColumnIds: o.subColumns.sku ? [o.subColumns.sku] : ['name'],\n  });\n  const matches = ((data.items_page_by_column_values || {}).items || [])\n    .filter(it => textOf(it, o.columns.order_number).trim().toLowerCase() === o.order.name.toLowerCase())\n    .sort((a, b) => Number(a.id) - Number(b.id));\n  const match = matches[0];\n  let board = null, stale = false;\n  if (match) {\n    const boardUpdatedAt = o.columns.shopify_updated_at ? textOf(match, o.columns.shopify_updated_at).trim() : '';\n    // Shopify does not promise delivery order. An update older than what the board shows is skipped.\n    stale = Boolean(boardUpdatedAt) && Date.parse(o.order.updatedAt) < Date.parse(boardUpdatedAt);\n    board = {\n      itemId: String(match.id), url: match.url, updatedAt: boardUpdatedAt,\n      flags: o.columns.flags ? flagsOf(textOf(match, o.columns.flags)) : [],\n      subitems: (match.subitems || []).map(s => ({ id: String(s.id), name: s.name || '', sku: o.subColumns.sku ? textOf(s, o.subColumns.sku) : '' })),\n    };\n  }\n  out.push({ json: { ...o, found: Boolean(match), stale, board, duplicateItemIds: matches.slice(1).map(m => String(m.id)) }, pairedItem: { item: i } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "3ebc3a25-c8aa-5845-9cce-fe6261f59cc6",
+      "name": "New Order?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c5dec36d-d126-59c1-91d4-14f5beb16c1c",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7e59c6bd-7ea0-5151-9f2d-9f68a678e6d7",
+      "name": "Monday: Create Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// monday.com GraphQL client. The same block sits at the top of every \"Monday:\" node.\n// It runs in a Code node, not an HTTP Request node, for two reasons: monday sends most errors back\n// with HTTP 200 and an \"errors\" array, and its rate limit errors say how many seconds to wait\n// (retry_in_seconds). Here every GraphQL error fails the step, and rate limits wait as long as monday asks.\nconst MONDAY = {\n  url: 'https://api.monday.com/v2',\n  token: String($env.MONDAY_API_TOKEN || ''),\n  version: String($env.MONDAY_API_VERSION || '2026-07'),\n  attempts: Math.min(5, Math.max(1, Number($env.MONDAY_MAX_ATTEMPTS) || 4)),\n  maxWait: Math.min(60, Math.max(1, Number($env.MONDAY_MAX_WAIT_SECONDS) || 60)),\n  budget: 240, // seconds per step (requests and waits), so a step stops itself before n8n's 5 minute Code node limit\n  started: Date.now(),\n};\nconst elapsed = () => (Date.now() - MONDAY.started) / 1000;\nconst WAIT_CODES = ['COMPLEXITY_BUDGET_EXHAUSTED', 'ComplexityException', 'RATE_LIMIT_EXCEEDED', 'Rate Limit Exceeded',\n  'FIELD_LIMIT_EXCEEDED', 'maxConcurrencyExceeded', 'IP_RATE_LIMIT_EXCEEDED', 'IDEMPOTENCY_CONFLICT'];\nconst NO_RETRY_CODES = ['DAILY_LIMIT_EXCEEDED', 'API_TEMPORARILY_BLOCKED'];\nconst sleep = seconds => new Promise(resolve => setTimeout(resolve, seconds * 1000));\n// n8n keeps only the text after the last colon of a Code node error, so messages are made colon free.\nconst plain = text => String(text ?? '').replace(/https?:\\/\\//g, '').replace(/\\s*\\n\\s*/g, ' ').replace(/\\s*:\\s*/g, ', ');\n\n// Sends one GraphQL request. Mutations that create something pass an Idempotency-Key, so a retry\n// (or a second run doing the same thing at the same moment) gets monday's saved answer instead of a duplicate.\nconst monday = async (step, query, variables, idempotencyKey) => {\n  const headers = { Authorization: MONDAY.token, 'API-Version': MONDAY.version, 'Content-Type': 'application/json' };\n  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;\n  let problem = '';\n  let mayHaveRun = false; // true once an attempt failed in a way where monday may still have done the work\n  for (let attempt = 1; attempt <= MONDAY.attempts; attempt++) {\n    let res;\n    try {\n      res = await this.helpers.httpRequest({ method: 'POST', url: MONDAY.url, headers, body: { query, variables }, json: true,\n        returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 30000 });\n    } catch (e) {\n      res = { statusCode: 0, headers: {}, body: { error_message: String(e.message || e) } };\n    }\n    let body = res.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = { error_message: body.slice(0, 200) }; } }\n    body = body || {};\n    const errors = Array.isArray(body.errors) ? body.errors : [];\n    const status = Number(res.statusCode) || 0;\n    if (status === 200 && !errors.length && body.data) {\n      const replayed = String((res.headers || {})['idempotency-replayed'] || '').toLowerCase() === 'true';\n      return { data: body.data, replayedFromOtherRun: replayed && !mayHaveRun };\n    }\n    const first = errors[0] || {};\n    const ext = first.extensions || {};\n    const code = String(ext.code || body.error_code || '');\n    problem = `with ${code || 'an error'} (HTTP ${status || 'no response'}). ${first.message || body.error_message || 'No error message'}`;\n    if (status === 0 || status >= 500) mayHaveRun = true;\n    // 423 is monday's \"Resource is currently locked, please try again later\" (another write to the same board).\n    const retry = !NO_RETRY_CODES.includes(code)\n      && (status === 0 || status === 423 || status === 429 || status >= 500 || WAIT_CODES.includes(code) || Number(ext.status_code) === 429);\n    if (!retry || attempt === MONDAY.attempts) break;\n    const asked = Number(ext.retry_in_seconds ?? body.retry_in_seconds ?? (res.headers || {})['retry-after']);\n    const wait = Math.min(MONDAY.maxWait, asked > 0 ? asked : 2 * attempt);\n    if (elapsed() + wait > MONDAY.budget) { problem += ', still failing after ' + Math.round(elapsed()) + ' seconds'; break; }\n    await sleep(wait);\n  }\n  throw new Error(plain(`monday ${step} failed ${problem}`));\n};\nconst textOf = (item, columnId) => ((item && item.column_values) || []).find(c => c.id === columnId)?.text || '';\nconst flagsOf = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);\nconst UPDATE_ITEM = `mutation UpdateOrderItem($board: ID!, $item: ID!, $values: JSON!) {\n  change_multiple_column_values(board_id: $board, item_id: $item, column_values: $values, create_labels_if_missing: true) { id }\n}`;\n\n// Creates the order item. The Idempotency-Key is the same for every run about this order, so if two\n// deliveries (orders/create and orders/updated) both missed the item in the search, monday creates it once\n// and the second run gets the same item back. That run then applies its own values only if they are newer.\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const o = item.json;\n  const readIds = [o.columns.flags, o.columns.shopify_updated_at].filter(Boolean);\n  const query = `mutation CreateOrderItem($board: ID!, ${o.groupId ? '$group: String!, ' : ''}$name: String!, $values: JSON!, $columnIds: [String!]) {\n  create_item(board_id: $board, ${o.groupId ? 'group_id: $group, ' : ''}item_name: $name, column_values: $values, create_labels_if_missing: true) {\n    id url column_values(ids: $columnIds) { id text }\n  }\n}`;\n  const variables = { board: o.boardId, name: o.itemName, values: JSON.stringify(o.createValues), columnIds: readIds.length ? readIds : ['name'] };\n  if (o.groupId) variables.group = o.groupId;\n  const res = await monday(`Create Item for ${o.order.name}`, query, variables, `shopify-order:${o.boardId}:${o.order.id}`);\n  const created = res.data.create_item;\n  if (!created || !created.id) throw new Error(plain(`monday Create Item for ${o.order.name} returned no item id`));\n\n  let createdHere = true, boardFlags = [];\n  if (res.replayedFromOtherRun) {\n    createdHere = false;\n    boardFlags = o.columns.flags ? flagsOf(textOf(created, o.columns.flags)) : [];\n    const theirs = o.columns.shopify_updated_at ? textOf(created, o.columns.shopify_updated_at).trim() : '';\n    if (!theirs || !(Date.parse(o.order.updatedAt) < Date.parse(theirs))) {\n      await monday(`Update Item for ${o.order.name}`, UPDATE_ITEM, { board: o.boardId, item: String(created.id), values: JSON.stringify(o.updateValues) });\n    }\n  }\n  out.push({\n    json: { ...o, itemId: String(created.id), itemUrl: created.url, createdHere, boardFlags, subitemsToCreate: o.order.lineItems },\n    pairedItem: { item: i },\n  });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "447aa6c0-16db-5bb4-8cf6-a9606727cf5a",
+      "name": "Newer Than Board?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "8cc0bc86-4fc4-5ea4-92a6-3387bd340453",
+              "leftValue": "={{ $json.stale }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0dbdf830-f250-5d2b-9017-6160977efe86",
+      "name": "Monday: Update Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// monday.com GraphQL client. The same block sits at the top of every \"Monday:\" node.\n// It runs in a Code node, not an HTTP Request node, for two reasons: monday sends most errors back\n// with HTTP 200 and an \"errors\" array, and its rate limit errors say how many seconds to wait\n// (retry_in_seconds). Here every GraphQL error fails the step, and rate limits wait as long as monday asks.\nconst MONDAY = {\n  url: 'https://api.monday.com/v2',\n  token: String($env.MONDAY_API_TOKEN || ''),\n  version: String($env.MONDAY_API_VERSION || '2026-07'),\n  attempts: Math.min(5, Math.max(1, Number($env.MONDAY_MAX_ATTEMPTS) || 4)),\n  maxWait: Math.min(60, Math.max(1, Number($env.MONDAY_MAX_WAIT_SECONDS) || 60)),\n  budget: 240, // seconds per step (requests and waits), so a step stops itself before n8n's 5 minute Code node limit\n  started: Date.now(),\n};\nconst elapsed = () => (Date.now() - MONDAY.started) / 1000;\nconst WAIT_CODES = ['COMPLEXITY_BUDGET_EXHAUSTED', 'ComplexityException', 'RATE_LIMIT_EXCEEDED', 'Rate Limit Exceeded',\n  'FIELD_LIMIT_EXCEEDED', 'maxConcurrencyExceeded', 'IP_RATE_LIMIT_EXCEEDED', 'IDEMPOTENCY_CONFLICT'];\nconst NO_RETRY_CODES = ['DAILY_LIMIT_EXCEEDED', 'API_TEMPORARILY_BLOCKED'];\nconst sleep = seconds => new Promise(resolve => setTimeout(resolve, seconds * 1000));\n// n8n keeps only the text after the last colon of a Code node error, so messages are made colon free.\nconst plain = text => String(text ?? '').replace(/https?:\\/\\//g, '').replace(/\\s*\\n\\s*/g, ' ').replace(/\\s*:\\s*/g, ', ');\n\n// Sends one GraphQL request. Mutations that create something pass an Idempotency-Key, so a retry\n// (or a second run doing the same thing at the same moment) gets monday's saved answer instead of a duplicate.\nconst monday = async (step, query, variables, idempotencyKey) => {\n  const headers = { Authorization: MONDAY.token, 'API-Version': MONDAY.version, 'Content-Type': 'application/json' };\n  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;\n  let problem = '';\n  let mayHaveRun = false; // true once an attempt failed in a way where monday may still have done the work\n  for (let attempt = 1; attempt <= MONDAY.attempts; attempt++) {\n    let res;\n    try {\n      res = await this.helpers.httpRequest({ method: 'POST', url: MONDAY.url, headers, body: { query, variables }, json: true,\n        returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 30000 });\n    } catch (e) {\n      res = { statusCode: 0, headers: {}, body: { error_message: String(e.message || e) } };\n    }\n    let body = res.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = { error_message: body.slice(0, 200) }; } }\n    body = body || {};\n    const errors = Array.isArray(body.errors) ? body.errors : [];\n    const status = Number(res.statusCode) || 0;\n    if (status === 200 && !errors.length && body.data) {\n      const replayed = String((res.headers || {})['idempotency-replayed'] || '').toLowerCase() === 'true';\n      return { data: body.data, replayedFromOtherRun: replayed && !mayHaveRun };\n    }\n    const first = errors[0] || {};\n    const ext = first.extensions || {};\n    const code = String(ext.code || body.error_code || '');\n    problem = `with ${code || 'an error'} (HTTP ${status || 'no response'}). ${first.message || body.error_message || 'No error message'}`;\n    if (status === 0 || status >= 500) mayHaveRun = true;\n    // 423 is monday's \"Resource is currently locked, please try again later\" (another write to the same board).\n    const retry = !NO_RETRY_CODES.includes(code)\n      && (status === 0 || status === 423 || status === 429 || status >= 500 || WAIT_CODES.includes(code) || Number(ext.status_code) === 429);\n    if (!retry || attempt === MONDAY.attempts) break;\n    const asked = Number(ext.retry_in_seconds ?? body.retry_in_seconds ?? (res.headers || {})['retry-after']);\n    const wait = Math.min(MONDAY.maxWait, asked > 0 ? asked : 2 * attempt);\n    if (elapsed() + wait > MONDAY.budget) { problem += ', still failing after ' + Math.round(elapsed()) + ' seconds'; break; }\n    await sleep(wait);\n  }\n  throw new Error(plain(`monday ${step} failed ${problem}`));\n};\nconst textOf = (item, columnId) => ((item && item.column_values) || []).find(c => c.id === columnId)?.text || '';\nconst flagsOf = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);\nconst UPDATE_ITEM = `mutation UpdateOrderItem($board: ID!, $item: ID!, $values: JSON!) {\n  change_multiple_column_values(board_id: $board, item_id: $item, column_values: $values, create_labels_if_missing: true) { id }\n}`;\n\n// Updates the existing item and works out which line items are still missing as subitems\n// (for example when an earlier run stopped halfway). Matching is by name and SKU.\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const o = item.json;\n  await monday(`Update Item for ${o.order.name}`, UPDATE_ITEM, { board: o.boardId, item: o.board.itemId, values: JSON.stringify(o.updateValues) });\n  const key = s => `${String(s.name || '').trim().toLowerCase()}|${String(s.sku || '').trim().toLowerCase()}`;\n  const have = {};\n  for (const s of o.board.subitems) have[key(s)] = (have[key(s)] || 0) + 1;\n  const subitemsToCreate = o.order.lineItems.filter(li => {\n    const k = o.subColumns.sku ? key(li) : key({ name: li.name });\n    if (have[k] > 0) { have[k] -= 1; return false; }\n    return true;\n  });\n  out.push({\n    json: { ...o, itemId: o.board.itemId, itemUrl: o.board.url, createdHere: false, boardFlags: o.board.flags, subitemsToCreate },\n    pairedItem: { item: i },\n  });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "b97954e8-225d-5e4b-9327-e2746c7baea0",
+      "name": "Skip: Older Update",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2180,
+        740
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "546103af-1202-526c-8556-8c55a79cdfe6",
+      "name": "Monday: Add Line Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// monday.com GraphQL client. The same block sits at the top of every \"Monday:\" node.\n// It runs in a Code node, not an HTTP Request node, for two reasons: monday sends most errors back\n// with HTTP 200 and an \"errors\" array, and its rate limit errors say how many seconds to wait\n// (retry_in_seconds). Here every GraphQL error fails the step, and rate limits wait as long as monday asks.\nconst MONDAY = {\n  url: 'https://api.monday.com/v2',\n  token: String($env.MONDAY_API_TOKEN || ''),\n  version: String($env.MONDAY_API_VERSION || '2026-07'),\n  attempts: Math.min(5, Math.max(1, Number($env.MONDAY_MAX_ATTEMPTS) || 4)),\n  maxWait: Math.min(60, Math.max(1, Number($env.MONDAY_MAX_WAIT_SECONDS) || 60)),\n  budget: 240, // seconds per step (requests and waits), so a step stops itself before n8n's 5 minute Code node limit\n  started: Date.now(),\n};\nconst elapsed = () => (Date.now() - MONDAY.started) / 1000;\nconst WAIT_CODES = ['COMPLEXITY_BUDGET_EXHAUSTED', 'ComplexityException', 'RATE_LIMIT_EXCEEDED', 'Rate Limit Exceeded',\n  'FIELD_LIMIT_EXCEEDED', 'maxConcurrencyExceeded', 'IP_RATE_LIMIT_EXCEEDED', 'IDEMPOTENCY_CONFLICT'];\nconst NO_RETRY_CODES = ['DAILY_LIMIT_EXCEEDED', 'API_TEMPORARILY_BLOCKED'];\nconst sleep = seconds => new Promise(resolve => setTimeout(resolve, seconds * 1000));\n// n8n keeps only the text after the last colon of a Code node error, so messages are made colon free.\nconst plain = text => String(text ?? '').replace(/https?:\\/\\//g, '').replace(/\\s*\\n\\s*/g, ' ').replace(/\\s*:\\s*/g, ', ');\n\n// Sends one GraphQL request. Mutations that create something pass an Idempotency-Key, so a retry\n// (or a second run doing the same thing at the same moment) gets monday's saved answer instead of a duplicate.\nconst monday = async (step, query, variables, idempotencyKey) => {\n  const headers = { Authorization: MONDAY.token, 'API-Version': MONDAY.version, 'Content-Type': 'application/json' };\n  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;\n  let problem = '';\n  let mayHaveRun = false; // true once an attempt failed in a way where monday may still have done the work\n  for (let attempt = 1; attempt <= MONDAY.attempts; attempt++) {\n    let res;\n    try {\n      res = await this.helpers.httpRequest({ method: 'POST', url: MONDAY.url, headers, body: { query, variables }, json: true,\n        returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 30000 });\n    } catch (e) {\n      res = { statusCode: 0, headers: {}, body: { error_message: String(e.message || e) } };\n    }\n    let body = res.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = { error_message: body.slice(0, 200) }; } }\n    body = body || {};\n    const errors = Array.isArray(body.errors) ? body.errors : [];\n    const status = Number(res.statusCode) || 0;\n    if (status === 200 && !errors.length && body.data) {\n      const replayed = String((res.headers || {})['idempotency-replayed'] || '').toLowerCase() === 'true';\n      return { data: body.data, replayedFromOtherRun: replayed && !mayHaveRun };\n    }\n    const first = errors[0] || {};\n    const ext = first.extensions || {};\n    const code = String(ext.code || body.error_code || '');\n    problem = `with ${code || 'an error'} (HTTP ${status || 'no response'}). ${first.message || body.error_message || 'No error message'}`;\n    if (status === 0 || status >= 500) mayHaveRun = true;\n    // 423 is monday's \"Resource is currently locked, please try again later\" (another write to the same board).\n    const retry = !NO_RETRY_CODES.includes(code)\n      && (status === 0 || status === 423 || status === 429 || status >= 500 || WAIT_CODES.includes(code) || Number(ext.status_code) === 429);\n    if (!retry || attempt === MONDAY.attempts) break;\n    const asked = Number(ext.retry_in_seconds ?? body.retry_in_seconds ?? (res.headers || {})['retry-after']);\n    const wait = Math.min(MONDAY.maxWait, asked > 0 ? asked : 2 * attempt);\n    if (elapsed() + wait > MONDAY.budget) { problem += ', still failing after ' + Math.round(elapsed()) + ' seconds'; break; }\n    await sleep(wait);\n  }\n  throw new Error(plain(`monday ${step} failed ${problem}`));\n};\nconst textOf = (item, columnId) => ((item && item.column_values) || []).find(c => c.id === columnId)?.text || '';\nconst flagsOf = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);\n\n// One subitem per line item: product name, SKU and quantity. Each one has its own Idempotency-Key,\n// so a retry or a second run working on the same order never adds a line twice.\nconst ADD_LINE = `mutation AddLineItem($parent: ID!, $name: String!, $values: JSON!) {\n  create_subitem(parent_item_id: $parent, item_name: $name, column_values: $values) { id name }\n}`;\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const o = item.json;\n  const lines = o.subitemsToCreate || [];\n  let added = 0;\n  for (const [n, li] of lines.entries()) {\n    // Very large orders: stop before n8n ends the step at 5 minutes, so the alert says how far it got.\n    if (elapsed() > MONDAY.budget) throw new Error(plain(`monday Add Line Items for ${o.order.name} stopped after ${added} of ${lines.length} lines to stay inside the n8n Code node time limit. The next update of this order adds the missing lines.`));\n    const values = {};\n    if (o.subColumns.sku && li.sku) values[o.subColumns.sku] = li.sku;\n    if (o.subColumns.quantity) values[o.subColumns.quantity] = String(li.quantity);\n    try {\n      await monday(`Add Line Item for ${o.order.name}`, ADD_LINE, { parent: o.itemId, name: li.name, values: JSON.stringify(values) },\n        `shopify-line:${o.boardId}:${o.order.id}:${li.lineItemId}`);\n    } catch (e) {\n      throw new Error(plain(`${e.message}. Line ${n + 1} of ${lines.length} (${li.name}) and any after it were not added, ${added} added before it. The next update of this order adds the missing lines.`));\n    }\n    added += 1;\n  }\n  out.push({ json: { ...o, subitemsAdded: added }, pairedItem: { item: i } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "06de2c6a-c09b-5eeb-aed9-c50cb73bdedc",
+      "name": "Build Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Writes the Slack alert for VIP and rush orders. Each flag is announced once: on a new order,\n// or when an update adds a flag the board did not show yet.\n// Names, emails and shipping titles come from the order, so a shopper could type Slack markup such as\n// <!channel> or <https://...|text> into them. Slack's rule is to escape &, < and > in such text.\nconst safe = text => String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst out = [];\n$input.all().forEach((item, i) => {\n  const o = item.json;\n  let newFlags = o.createdHere ? o.flags : o.flags.filter(f => !(o.boardFlags || []).includes(f));\n  if (!o.createdHere && !o.columns.flags) newFlags = []; // without a flags column there is no record of earlier alerts\n  const lines = [];\n  const name = safe(o.order.name);\n  if (newFlags.length) {\n    const label = newFlags.join(' + ');\n    const reasons = o.flagReasons.filter((r, n) => newFlags.includes(o.flags[n]));\n    const units = o.order.lineItems.reduce((sum, li) => sum + li.quantity, 0);\n    lines.push(o.createdHere ? `*${label} order ${name}*` : `*Order ${name} is now ${label}*`, '',\n      `Customer: ${safe(o.order.customer)}${o.order.email ? ` (${safe(o.order.email)})` : ''}`,\n      `Total: ${o.order.total}${o.order.currency ? ' ' + safe(o.order.currency) : ''}`,\n      `Shipping: ${safe(o.order.shipping)}`,\n      `Payment: ${safe(o.order.payment)}`,\n      `Line items: ${o.order.lineItems.length} (${units} ${units === 1 ? 'unit' : 'units'})`,\n      `Why: ${safe(reasons.join('; '))}`,\n      `Open in monday.com: ${o.itemUrl}`);\n  }\n  if ((o.duplicateItemIds || []).length) {\n    if (!lines.length) lines.push(`*Order ${name} has duplicate items on the board*`);\n    lines.push(`Note: ${o.duplicateItemIds.length + 1} items have order number ${name}. Item ${o.itemId} was updated. Please merge or delete item ${o.duplicateItemIds.join(', ')}.`);\n  }\n  out.push({ json: { ...o, alertText: lines.join('\\n') }, pairedItem: { item: i } });\n});\nreturn out;\n"
+      }
+    },
+    {
+      "id": "d3e0f674-4eb8-5834-b135-4bd08cee008f",
+      "name": "Alert Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2940,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "51b7ab42-3765-5ce0-ab52-124f8751aaa9",
+              "leftValue": "={{ $json.alertText }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "9ce386b3-51c6-5954-a2e9-3b910c73dcdd",
+              "leftValue": "={{ $env.SLACK_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1ecff97f-fd81-53df-916d-04b01d7ed118",
+      "name": "Slack: Order Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3160,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.alertText }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Shopify Webhook": {
+      "main": [
+        [
+          {
+            "node": "Sign Raw Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign Raw Body": {
+      "main": [
+        [
+          {
+            "node": "Signature Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond: OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond: Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond: Unauthorized": {
+      "main": [
+        [
+          {
+            "node": "Stop: Bad Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond: OK": {
+      "main": [
+        [
+          {
+            "node": "Prepare Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Order": {
+      "main": [
+        [
+          {
+            "node": "Should Sync?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Sync?": {
+      "main": [
+        [
+          {
+            "node": "Monday: Find Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip: Repeat or Other Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monday: Find Order": {
+      "main": [
+        [
+          {
+            "node": "New Order?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Order?": {
+      "main": [
+        [
+          {
+            "node": "Monday: Create Item",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Newer Than Board?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Newer Than Board?": {
+      "main": [
+        [
+          {
+            "node": "Monday: Update Item",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip: Older Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monday: Create Item": {
+      "main": [
+        [
+          {
+            "node": "Monday: Add Line Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monday: Update Item": {
+      "main": [
+        [
+          {
+            "node": "Monday: Add Line Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monday: Add Line Items": {
+      "main": [
+        [
+          {
+            "node": "Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert": {
+      "main": [
+        [
+          {
+            "node": "Alert Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Needed?": {
+      "main": [
+        [
+          {
+            "node": "Slack: Order Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
